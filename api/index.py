@@ -4,6 +4,9 @@ import json
 import numpy as np
 
 app = FastAPI()
+@app.get("/")
+def health():
+    return {"status": "ok"}
 
 # Enable CORS for POST requests from any origin
 app.add_middleware(
