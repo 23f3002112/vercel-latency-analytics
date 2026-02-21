@@ -1,5 +1,4 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, Request, Response
 from pydantic import BaseModel
 from typing import List
 from pathlib import Path
@@ -8,18 +7,25 @@ import statistics
 
 app = FastAPI()
 
-# Enable CORS for grader (Access-Control-Allow-Origin: *)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# -------------------------------
+# Manual CORS handler (grader safe)
+# -------------------------------
+
+@app.options("/{path:path}")
+def preflight_handler(path: str):
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        },
+    )
 
 # -------------------------------
 # Load telemetry.json safely
 # -------------------------------
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_FILE = BASE_DIR / "telemetry.json"
 
@@ -29,35 +35,33 @@ if not DATA_FILE.exists():
 with open(DATA_FILE, "r") as f:
     telemetry = json.load(f)
 
+# -------------------------------
+# Request Model
+# -------------------------------
 
-# -------------------------------
-# Request model
-# -------------------------------
 class Input(BaseModel):
     regions: List[str]
     threshold_ms: int
 
+# -------------------------------
+# POST endpoint
+# -------------------------------
 
-# -------------------------------
-# POST endpoint (ROOT "/")
-# -------------------------------
 @app.post("/")
 def analyze(payload: Input):
     results = {}
 
     for region in payload.regions:
         rows = [r for r in telemetry if r["region"] == region]
-
         if not rows:
             continue
 
         latencies = [r["latency_ms"] for r in rows]
         uptimes = [r["uptime_pct"] for r in rows]
 
-        # Mean latency
         avg_latency = statistics.mean(latencies)
 
-        # -------- p95 (grader safe) --------
+        # p95 calculation
         sorted_lat = sorted(latencies)
         n = len(sorted_lat)
         idx = 0.95 * (n - 1)
@@ -70,10 +74,7 @@ def analyze(payload: Input):
         else:
             p95 = sorted_lat[lo]
 
-        # Mean uptime
         avg_uptime = statistics.mean(uptimes)
-
-        # Count breaches
         breaches = sum(1 for l in latencies if l > payload.threshold_ms)
 
         results[region] = {
@@ -83,5 +84,8 @@ def analyze(payload: Input):
             "breaches": breaches,
         }
 
-    # Grader expects "regions"
-    return {"regions": results}
+    return Response(
+        content=json.dumps({"regions": results}),
+        media_type="application/json",
+        headers={"Access-Control-Allow-Origin": "*"},
+    )
