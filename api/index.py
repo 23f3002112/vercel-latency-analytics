@@ -1,4 +1,5 @@
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
 from pathlib import Path
@@ -7,45 +8,27 @@ import statistics
 
 app = FastAPI()
 
-# -------------------------------
-# Manual CORS handler (grader safe)
-# -------------------------------
+# Proper CORS for Vercel + Grader
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-@app.options("/{path:path}")
-def preflight_handler(path: str):
-    return Response(
-        status_code=200,
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "*",
-        },
-    )
-
-# -------------------------------
-# Load telemetry.json safely
-# -------------------------------
-
+# Load telemetry file
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_FILE = BASE_DIR / "telemetry.json"
-
-if not DATA_FILE.exists():
-    raise Exception(f"Missing telemetry.json at {DATA_FILE}")
 
 with open(DATA_FILE, "r") as f:
     telemetry = json.load(f)
 
-# -------------------------------
-# Request Model
-# -------------------------------
 
 class Input(BaseModel):
     regions: List[str]
     threshold_ms: int
 
-# -------------------------------
-# POST endpoint
-# -------------------------------
 
 @app.post("/")
 def analyze(payload: Input):
@@ -56,26 +39,25 @@ def analyze(payload: Input):
         if not rows:
             continue
 
-        latencies = [r["latency_ms"] for r in rows]
-        uptimes = [r["uptime_pct"] for r in rows]
+        lat = [r["latency_ms"] for r in rows]
+        up = [r["uptime_pct"] for r in rows]
 
-        avg_latency = statistics.mean(latencies)
+        avg_latency = statistics.mean(lat)
 
-        # p95 calculation
-        sorted_lat = sorted(latencies)
-        n = len(sorted_lat)
-        idx = 0.95 * (n - 1)
-        lo = int(idx)
+        # Correct p95
+        s = sorted(lat)
+        n = len(s)
+        i = 0.95 * (n - 1)
+        lo = int(i)
         hi = lo + 1
-        frac = idx - lo
-
+        frac = i - lo
         if hi < n:
-            p95 = sorted_lat[lo] + frac * (sorted_lat[hi] - sorted_lat[lo])
+            p95 = s[lo] + frac * (s[hi] - s[lo])
         else:
-            p95 = sorted_lat[lo]
+            p95 = s[lo]
 
-        avg_uptime = statistics.mean(uptimes)
-        breaches = sum(1 for l in latencies if l > payload.threshold_ms)
+        avg_uptime = statistics.mean(up)
+        breaches = sum(1 for x in lat if x > payload.threshold_ms)
 
         results[region] = {
             "avg_latency": round(avg_latency, 2),
@@ -84,8 +66,4 @@ def analyze(payload: Input):
             "breaches": breaches,
         }
 
-    return Response(
-        content=json.dumps({"regions": results}),
-        media_type="application/json",
-        headers={"Access-Control-Allow-Origin": "*"},
-    )
+    return {"regions": results}
